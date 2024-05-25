@@ -1,4 +1,5 @@
 # Tested with weaviate-client==3.26.0
+# Weaviate instrumentation with opentelemetry-instrumentation-weaviate==0.19.0
 # Code is adapted from official documentation.
 # V3 documentation: https://weaviate.io/developers/weaviate/client-libraries/python/python_v3
 # Some parts were also adapted from:
@@ -10,9 +11,20 @@ from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task
 from traceloop.sdk.decorators import workflow
+from traceloop.sdk.instruments import Instruments
 
 
 CLASS_NAME = "Article"
+RAW_QUERY = """
+ {
+   Get {
+     Article(limit: 2) {
+        author
+        text
+     }
+   }
+ }
+ """
 
 
 @task("create_schema")
@@ -100,27 +112,17 @@ def query_aggregate(client):
 
 @task("query_raw")
 def query_raw(client):
-    return client.query.raw(
-        """
- {
-   Get {
-     Article(limit: 2) {
-        author
-        text
-     }
-   }
- }
- """
-    )
+    return client.query.raw(RAW_QUERY)
 
 
 @task("validate")
-def validate(client):
+def validate(client, uuid=None):
     return client.data_object.validate(
         data_object={
             "author": "Robert",
             "text": "Once upon a time, someone wrote a book...",
         },
+        uuid=uuid,
         class_name=CLASS_NAME,
     )
 
@@ -170,27 +172,30 @@ def delete_all(client):
 @workflow("example")
 def example_schema_workflow(client):
     delete_all(client)
+
     create_schema(client)
     print("Created schema")
-    result = get_schema(client)
-    print("Retrieved schema: ", result)
-    validate(client)
+    schema = get_schema(client)
+    print("Retrieved schema: ", schema)
+    result = validate(client)
+    print(f"Object found: {result.get('valid')}")
+
     uuid = create_object(client)
     print("Created object of UUID: ", uuid)
     client.data_object.exists(uuid, class_name=CLASS_NAME)
     obj = client.data_object.get(uuid, class_name=CLASS_NAME)
     print("Retrieved obj: ", obj)
+    result = validate(client, uuid=uuid)
+    print(f"Object found: {result.get('valid')}")
 
     create_batch(client)
-
     result = query_get(client)
     print("Query result:", result)
-
     aggregate_result = query_aggregate(client)
     print("Aggregate result:", aggregate_result)
-
     raw_result = query_raw(client)
     print("Raw result: ", raw_result)
+
     delete_schema(client)
     print("Deleted schema")
 
@@ -206,13 +211,15 @@ if __name__ == "__main__":
         app_name="weaviate_app",
         disable_batch=True,
         exporter=None if os.getenv("TRACELOOP_API_KEY") else ConsoleSpanExporter(),
+        # comment below if you would like to see everything
+        instruments={Instruments.WEAVIATE},
     )
     print("Traceloop initialized")
 
     additional_headers = {}
     if (key := os.getenv("COHERE_API_KEY")) is not None:
         additional_headers.update({"X-Cohere-Api-Key": key})
-    if (key := os.getenv("OPENAI_API_KEY")) is not None:
+    elif (key := os.getenv("OPENAI_API_KEY")) is not None:
         additional_headers.update({"X-OpenAI-Api-Key": key})
     else:
         raise RuntimeError("Missing api key cohere/openai")

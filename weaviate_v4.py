@@ -1,4 +1,5 @@
 # Tested with weaviate-client==4.6.3
+# Weaviate instrumentation with opentelemetry-instrumentation-weaviate==0.20.0
 # Code is adapted from official documentation.
 # V4 documentation: https://weaviate.io/developers/weaviate/client-libraries/python
 import os
@@ -8,6 +9,7 @@ import weaviate.classes as wvc
 from opentelemetry.sdk.trace.export import ConsoleSpanExporter
 from traceloop.sdk import Traceloop
 from traceloop.sdk.decorators import task, workflow
+from traceloop.sdk.instruments import Instruments
 
 
 BACKEND = {
@@ -21,6 +23,16 @@ BACKEND = {
     },
 }
 COLLECTION_NAME = "Article"
+RAW_QUERY = """
+ {
+   Get {
+     Article(limit: 2) {
+        author
+        text
+     }
+   }
+ }
+ """
 
 
 @task("create_collection")
@@ -53,7 +65,6 @@ def get_collection(client, collection_name):
 
 @task("insert_data")
 def insert_data(collection):
-    print("***Insert data...")
     return collection.data.insert({
         "author": "Robert",
         "text": "Once upon a time, someone wrote a book...",
@@ -99,6 +110,11 @@ def query_get(collection):
 @task("query_aggregate")
 def query_aggregate(collection):
     return collection.aggregate.over_all(total_count=True)
+
+
+@task("query_raw")
+def query_raw(client):
+    return client.graphql_raw_query(RAW_QUERY)
 
 
 @task("delete_collection")
@@ -154,6 +170,7 @@ def example_workflow(client, backend):
     print("Created collection")
     collection = get_collection(client, COLLECTION_NAME)
     print("Retrieved collection: ", collection)
+
     uuid = insert_data(collection)
     print("Created object of UUID: ", uuid)
     obj = collection.query.fetch_object_by_id(uuid)
@@ -164,6 +181,8 @@ def example_workflow(client, backend):
     print("Query result:", result)
     aggregate_result = query_aggregate(collection)
     print("Aggregate result:", aggregate_result)
+    raw_result = query_raw(client)
+    print("Raw result: ", raw_result)
 
     delete_collection(client)
     print("Deleted collection")
@@ -180,6 +199,8 @@ if __name__ == "__main__":
         app_name="weaviate_app",
         disable_batch=True,
         exporter=None if os.getenv("TRACELOOP_API_KEY") else ConsoleSpanExporter(),
+        # comment below if you would like to see everything
+        instruments={Instruments.WEAVIATE},
     )
     print("Traceloop initialized")
 
